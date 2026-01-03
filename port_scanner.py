@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import socket
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,6 +24,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.6,
         help="Socket timeout in seconds (default: 0.6)",
+    )
+    parser.add_argument(
+        "-w", "--workers",
+        type=int,
+        default=150,
+        help="Number of threads (default: 150)",
     )
     return parser.parse_args()
 
@@ -54,16 +61,17 @@ def parse_ports(spec: str) -> list[int]:
     return valid
 
 
-def scan_port(target: str, port: int, timeout: float) -> bool:
-    """Return True if TCP connect succeeds (port likely open)."""
+def scan_port(target: str, port: int, timeout: float) -> tuple[int, bool]:
+    """Return (port, is_open)."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(timeout)
         try:
-            return s.connect_ex((target, port)) == 0
+            ok = s.connect_ex((target, port)) == 0
+            return port, ok
         except socket.gaierror:
             raise SystemExit("Error: Could not resolve target hostname")
         except OSError:
-            return False
+            return port, False
 
 
 def main() -> None:
@@ -73,21 +81,30 @@ def main() -> None:
     except ValueError as e:
         raise SystemExit(f"Error: {e}")
 
+    if args.workers < 1 or args.workers > 2000:
+        raise SystemExit("Error: workers must be between 1 and 2000")
+
     print("TCP Port Scanner (permission-only)")
-    print(f"Target:  {args.target}")
-    print(f"Ports:   {ports[0]}..{ports[-1]} ({len(ports)} total)")
-    print(f"Timeout: {args.timeout}s")
+    print(f"Target:   {args.target}")
+    print(f"Ports:    {ports[0]}..{ports[-1]} ({len(ports)} total)")
+    print(f"Timeout:  {args.timeout}s")
+    print(f"Workers:  {args.workers}")
     print("-" * 40)
 
     start = time.time()
     open_ports: list[int] = []
 
-    for p in ports:
-        if scan_port(args.target, p, args.timeout):
-            open_ports.append(p)
-            print(f"[OPEN] {p}")
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futures = [ex.submit(scan_port, args.target, p, args.timeout) for p in ports]
+        for fut in as_completed(futures):
+            port, is_open = fut.result()
+            if is_open:
+                open_ports.append(port)
+                print(f"[OPEN] {port}")
 
+    open_ports.sort()
     elapsed = time.time() - start
+
     print("-" * 40)
     if open_ports:
         print(f"Open ports: {', '.join(map(str, open_ports))}")
