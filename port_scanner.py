@@ -6,6 +6,8 @@ Only scan systems you own or have explicit permission to test.
 
 from __future__ import annotations
 import argparse
+import socket
+import time
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,7 +43,6 @@ def parse_ports(spec: str) -> list[int]:
         for part in parts:
             ports.add(int(part))
 
-    # validate
     valid: list[int] = []
     for p in sorted(ports):
         if 1 <= p <= 65535:
@@ -53,6 +54,18 @@ def parse_ports(spec: str) -> list[int]:
     return valid
 
 
+def scan_port(target: str, port: int, timeout: float) -> bool:
+    """Return True if TCP connect succeeds (port likely open)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        try:
+            return s.connect_ex((target, port)) == 0
+        except socket.gaierror:
+            raise SystemExit("Error: Could not resolve target hostname")
+        except OSError:
+            return False
+
+
 def main() -> None:
     args = parse_args()
     try:
@@ -60,9 +73,27 @@ def main() -> None:
     except ValueError as e:
         raise SystemExit(f"Error: {e}")
 
+    print("TCP Port Scanner (permission-only)")
     print(f"Target:  {args.target}")
     print(f"Ports:   {ports[0]}..{ports[-1]} ({len(ports)} total)")
     print(f"Timeout: {args.timeout}s")
+    print("-" * 40)
+
+    start = time.time()
+    open_ports: list[int] = []
+
+    for p in ports:
+        if scan_port(args.target, p, args.timeout):
+            open_ports.append(p)
+            print(f"[OPEN] {p}")
+
+    elapsed = time.time() - start
+    print("-" * 40)
+    if open_ports:
+        print(f"Open ports: {', '.join(map(str, open_ports))}")
+    else:
+        print("No open ports found in the selected range.")
+    print(f"Scan time: {elapsed:.2f}s")
 
 
 if __name__ == "__main__":
